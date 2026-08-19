@@ -1,336 +1,50 @@
-/*
- * KAS RT 01 / RW 01 - Google Apps Script backend
- * Copy this file into a Google Apps Script project.
- * Database: Google Sheets
- * Files/reports: Google Drive
- */
+/* KAS RT 01 / RW 01 - Google Apps Script backend */
+const DB_ID='1bjH08HdZwb7de7tsFe_uZpBY5NvlR8UC8rBr1yVq-ng';
+const DEFAULT_PASSWORD='RT01@2026';
+const TZ='Asia/Jakarta';
+const SHEETS={TRANSAKSI:'TRANSAKSI',CONFIG:'CONFIG',KATEGORI:'KATEGORI',AUDIT:'AUDIT_LOG'};
+const HEADERS=['ID','Timestamp','Tanggal','Waktu','Jenis','Kategori','Nominal','Keterangan','Catatan','Status','BuktiURL','UpdatedAt'];
+const AUDIT_HEADERS=['Timestamp','Action','TransactionID','Reason','Actor','BeforeJSON','AfterJSON'];
+const CATS={Pemasukan:['Iuran Warga','Sumbangan','Bantuan','Donasi','Pendapatan Kegiatan','Lainnya'],Pengeluaran:['Kebersihan','Keamanan','Kegiatan Warga','Sosial','Perbaikan Fasilitas','Listrik','Administrasi','Konsumsi','Bantuan Warga','Lainnya']};
 
-const DB_ID = '1bjH08HdZwb7de7tsFe_uZpBY5NvlR8UC8rBr1yVq-ng';
-const DEFAULT_PASSWORD = 'RT01@2026';
-const TZ = 'Asia/Jakarta';
+function doGet(e){try{ensureSetup_();const a=String(e?.parameter?.action||'health');return json_(route_(a,e?.parameter||{}));}catch(x){return json_({success:false,message:x.message});}}
+function doPost(e){try{ensureSetup_();const p=parse_(e);const a=String(p.action||e?.parameter?.action||'');if(!a)throw Error('Action tidak ditemukan.');return json_(route_(a,p));}catch(x){return json_({success:false,message:x.message});}}
+function route_(a,p){switch(a){case'health':return health_();case'initialData':return initialData_();case'transactions':return{success:true,transactions:getTransactions_().map(normalize_)};case'createTransaction':return create_(p);case'updateTransaction':return update_(p);case'cancelTransaction':return cancel_(p);case'updateConfig':return config_(p);case'changePassword':return password_(p);case'exportReport':return export_(p);case'reportSummary':return report_();default:throw Error('Action tidak dikenali: '+a);}}
 
-const SHEETS = {
-  TRANSAKSI: 'TRANSAKSI',
-  CONFIG: 'CONFIG',
-  KATEGORI: 'KATEGORI',
-  AUDIT: 'AUDIT_LOG'
-};
+function setupApp(){ensureSetup_();Logger.log('SETUP SELESAI: '+ss_().getUrl());}
+function ensureSetup_(){const s=ss_();sheet_(SHEETS.TRANSAKSI,HEADERS);sheet_(SHEETS.CONFIG,['Key','Value']);sheet_(SHEETS.KATEGORI,['Jenis','Kategori']);sheet_(SHEETS.AUDIT,AUDIT_HEADERS);const p=PropertiesService.getScriptProperties();if(!p.getProperty('SPREADSHEET_ID'))p.setProperty('SPREADSHEET_ID',DB_ID);if(!p.getProperty('ADMIN_PASSWORD_HASH'))p.setProperty('ADMIN_PASSWORD_HASH',hash_(DEFAULT_PASSWORD));const c=readConfig_();const d={nama_rt:'RT 01',nama_rw:'RW 01',dukuh:'Dukuh Gudang',desa:'Desa Surorejan',kecamatan:'Kecamatan Puring',kabupaten:'Kabupaten Kebumen',ketua_rt:'',bendahara:'',saldo_awal:'0',next_transaction_no:'1'};Object.keys(d).forEach(k=>{if(!(k in c))setConfig_(k,d[k]);});const k=ss_().getSheetByName(SHEETS.KATEGORI);if(k.getLastRow()<2){const r=[];Object.keys(CATS).forEach(j=>CATS[j].forEach(x=>r.push([j,x])));k.getRange(2,1,r.length,2).setValues(r);}}
+function health_(){return{success:true,status:'OK',app:'Kas RT 01 / RW 01',time:new Date().toISOString()};}
+function initialData_(){return{success:true,config:readConfig_(),categories:readCategories_(),transactions:getTransactions_().map(normalize_),dashboard:dashboard_()};}
 
-const TRANSACTION_HEADERS = ['ID','Timestamp','Tanggal','Waktu','Jenis','Kategori','Nominal','Keterangan','Catatan','Status','BuktiURL','UpdatedAt'];
-const AUDIT_HEADERS = ['Timestamp','Action','TransactionID','Reason','Actor','BeforeJSON','AfterJSON'];
-const DEFAULT_CATEGORIES = {
-  Pemasukan: ['Iuran Warga','Sumbangan','Bantuan','Donasi','Pendapatan Kegiatan','Lainnya'],
-  Pengeluaran: ['Kebersihan','Keamanan','Kegiatan Warga','Sosial','Perbaikan Fasilitas','Listrik','Administrasi','Konsumsi','Bantuan Warga','Lainnya']
-};
+/* SERVER IS THE SINGLE SOURCE OF TRUTH FOR CASH */
+function dashboard_(){const c=readConfig_(),t=getTransactions_();let in_=0,out=0,n=0;t.forEach(x=>{if(String(x.Status).toUpperCase()!=='AKTIF')return;const v=Number(x.Nominal)||0;if(x.Jenis==='Pemasukan')in_+=v;else if(x.Jenis==='Pengeluaran')out+=v;n++;});const awal=Number(c.saldo_awal)||0;return{saldoAwal:awal,pemasukan:in_,pengeluaran:out,saldo:awal+in_-out,jumlahTransaksi:n};}
+function report_(){const c=readConfig_(),d=dashboard_();return{success:true,date:Utilities.formatDate(new Date(),TZ,'d/M/yyyy'),nama_rt:c.nama_rt||'RT 01',nama_rw:c.nama_rw||'RW 01',dukuh:c.dukuh||'Dukuh Gudang',desa:c.desa||'Desa Surorejan',saldoAwal:d.saldoAwal,pemasukan:d.pemasukan,pengeluaran:d.pengeluaran,saldo:d.saldo};}
 
-function doGet(e) {
-  try {
-    ensureSetup_();
-    const action = String((e && e.parameter && e.parameter.action) || 'health');
-    return json_(route_(action, e && e.parameter ? e.parameter : {}));
-  } catch (err) {
-    return json_({success:false,message:err.message});
-  }
-}
+function create_(p){const jenis=String(p.jenis||'');if(!['Pemasukan','Pengeluaran'].includes(jenis))throw Error('Jenis transaksi tidak valid.');const nominal=Number(p.nominal);if(!Number.isFinite(nominal)||nominal<=0)throw Error('Nominal harus lebih besar dari 0.');if(!p.tanggal||!p.waktu||!p.kategori||!p.keterangan)throw Error('Tanggal, waktu, kategori, dan keterangan wajib diisi.');const lock=LockService.getScriptLock();lock.waitLock(10000);let id;try{id=nextId_();const now=new Date();const row=[id,now,String(p.tanggal),String(p.waktu),jenis,String(p.kategori),nominal,String(p.keterangan),String(p.catatan||''),'AKTIF',String(p.buktiUrl||''),now];ss_().getSheetByName(SHEETS.TRANSAKSI).appendRow(row);audit_('CREATE',id,'',{},obj_(row));SpreadsheetApp.flush();}finally{lock.releaseLock();}const tx=find_(id);return{success:true,message:'Transaksi berhasil disimpan di database.',id,transaction:normalize_(tx.object),dashboard:dashboard_()};}
+function nextId_(){const c=readConfig_();let n=parseInt(c.next_transaction_no||'1',10);if(!Number.isFinite(n)||n<1)n=1;setConfig_('next_transaction_no',String(n+1));return'TRX-'+String(n).padStart(5,'0');}
 
-function doPost(e) {
-  try {
-    ensureSetup_();
-    const body = parseBody_(e);
-    const action = String(body.action || (e && e.parameter && e.parameter.action) || '');
-    if (!action) throw new Error('Action tidak ditemukan.');
-    return json_(route_(action, body));
-  } catch (err) {
-    return json_({success:false,message:err.message});
-  }
-}
+function update_(p){auth_(p.password);if(!p.transactionId||!p.reason)throw Error('ID transaksi dan alasan perubahan wajib diisi.');const f=find_(p.transactionId);if(!f)throw Error('Transaksi tidak ditemukan.');const b=f.object;if(String(b.Status).toUpperCase()!=='AKTIF')throw Error('Transaksi yang sudah dibatalkan tidak dapat diedit.');const d=p.data||{},v=Number(d.nominal);if(!Number.isFinite(v)||v<=0)throw Error('Nominal tidak valid.');const a=Object.assign({},b,{Tanggal:String(d.tanggal||b.Tanggal),Waktu:String(d.waktu||b.Waktu),Jenis:String(d.jenis||b.Jenis),Kategori:String(d.kategori||b.Kategori),Nominal:v,Keterangan:String(d.keterangan||b.Keterangan),Catatan:String(d.catatan??b.Catatan),UpdatedAt:new Date()});f.sheet.getRange(f.row,1,1,HEADERS.length).setValues([HEADERS.map(h=>a[h]??'')]);audit_('UPDATE',p.transactionId,p.reason,b,a);SpreadsheetApp.flush();return{success:true,message:'Transaksi berhasil diperbarui di database.',transaction:normalize_(find_(p.transactionId).object),dashboard:dashboard_()};}
+function cancel_(p){auth_(p.password);if(!p.transactionId||!p.reason)throw Error('ID transaksi dan alasan pembatalan wajib diisi.');const f=find_(p.transactionId);if(!f)throw Error('Transaksi tidak ditemukan.');const b=f.object;if(String(b.Status).toUpperCase()!=='AKTIF')throw Error('Transaksi sudah dibatalkan.');f.sheet.getRange(f.row,10).setValue('DIBATALKAN');f.sheet.getRange(f.row,12).setValue(new Date());const a=Object.assign({},b,{Status:'DIBATALKAN',UpdatedAt:new Date()});audit_('CANCEL',p.transactionId,p.reason,b,a);SpreadsheetApp.flush();return{success:true,message:'Transaksi dibatalkan.',transaction:normalize_(find_(p.transactionId).object),dashboard:dashboard_()};}
 
-function route_(action, p) {
-  switch (action) {
-    case 'health': return health_();
-    case 'initialData': return initialData_();
-    case 'transactions': return {success:true,transactions:normalizeTransactionsForApi_(getTransactions_())};
-    case 'createTransaction': return createTransaction_(p);
-    case 'updateTransaction': return updateTransaction_(p);
-    case 'cancelTransaction': return cancelTransaction_(p);
-    case 'updateConfig': return updateConfig_(p);
-    case 'changePassword': return changePassword_(p);
-    case 'exportReport': return exportReport_(p);
-    case 'reportSummary': return reportSummary_();
-    default: throw new Error('Action tidak dikenali: ' + action);
-  }
-}
+function config_(p){auth_(p.password);const c=p.config||{};Object.keys(c).forEach(k=>setConfig_(k,c[k]));audit_('CONFIG','','Perubahan pengaturan',{},c);SpreadsheetApp.flush();return{success:true,message:'Pengaturan berhasil disimpan di database.',config:readConfig_(),dashboard:dashboard_()};}
+function password_(p){auth_(p.currentPassword);const n=String(p.newPassword||'');if(n.length<8)throw Error('Password baru minimal 8 karakter.');PropertiesService.getScriptProperties().setProperty('ADMIN_PASSWORD_HASH',hash_(n));audit_('PASSWORD','','Ganti password',{},{});return{success:true,message:'Password berhasil diganti.'};}
 
-function setupApp() {
-  const ss = SpreadsheetApp.openById(DB_ID);
-  ensureSheet_(ss, SHEETS.TRANSAKSI, TRANSACTION_HEADERS);
-  ensureSheet_(ss, SHEETS.CONFIG, ['Key','Value']);
-  ensureSheet_(ss, SHEETS.KATEGORI, ['Jenis','Kategori']);
-  ensureSheet_(ss, SHEETS.AUDIT, AUDIT_HEADERS);
+function export_(p){const start=String(p.startDate||''),end=String(p.endDate||'');const tx=getTransactions_().filter(x=>String(x.Status).toUpperCase()==='AKTIF'&&(!start||x.Tanggal>=start)&&(!end||x.Tanggal<=end));const c=readConfig_();let i=0,o=0;tx.forEach(x=>x.Jenis==='Pemasukan'?i+=Number(x.Nominal):o+=Number(x.Nominal));const doc=DocumentApp.create('Laporan Kas RT '+(start||'awal')+' - '+(end||'sekarang')),b=doc.getBody();b.appendParagraph((c.nama_rt||'RT 01')+' / '+(c.nama_rw||'RW 01')).setHeading(DocumentApp.ParagraphHeading.TITLE);b.appendParagraph([c.dukuh,c.desa,c.kecamatan,c.kabupaten].filter(Boolean).join(' · '));b.appendParagraph('Saldo Awal: Rp '+money_(Number(c.saldo_awal)||0));b.appendParagraph('Pemasukan: Rp '+money_(i));b.appendParagraph('Pengeluaran: Rp '+money_(o));b.appendParagraph('Saldo Sekarang: Rp '+money_((Number(c.saldo_awal)||0)+i-o));const table=[['ID','Tanggal','Jenis','Kategori','Keterangan','Nominal']];tx.slice().reverse().forEach(x=>table.push([x.ID,x.Tanggal,x.Jenis,x.Kategori,x.Keterangan,'Rp '+money_(x.Nominal)]));if(table.length>1)b.appendTable(table);doc.saveAndClose();const f=getReportFolder_().createFile(DriveApp.getFileById(doc.getId()).getAs(MimeType.PDF)).setName(doc.getName()+'.pdf');DriveApp.getFileById(doc.getId()).setTrashed(true);return{success:true,url:f.getUrl(),fileId:f.getId(),name:f.getName()};}
 
-  const props = PropertiesService.getScriptProperties();
-  props.setProperty('SPREADSHEET_ID', DB_ID);
-  if (!props.getProperty('ADMIN_PASSWORD_HASH')) props.setProperty('ADMIN_PASSWORD_HASH', hash_(DEFAULT_PASSWORD));
-
-  const configSheet = ss.getSheetByName(SHEETS.CONFIG);
-  const existing = readConfig_(configSheet);
-  const defaults = {
-    nama_rt:'RT 01', nama_rw:'RW 01', dukuh:'Dukuh Gudang', desa:'Desa Surorejan',
-    kecamatan:'Kecamatan Puring', kabupaten:'Kabupaten Kebumen', ketua_rt:'', bendahara:'', saldo_awal:'0'
-  };
-  Object.keys(defaults).forEach(k => { if (!(k in existing)) upsertConfig_(configSheet,k,defaults[k]); });
-
-  const catSheet = ss.getSheetByName(SHEETS.KATEGORI);
-  if (catSheet.getLastRow() < 2) {
-    const rows=[];
-    Object.keys(DEFAULT_CATEGORIES).forEach(j => DEFAULT_CATEGORIES[j].forEach(c => rows.push([j,c])));
-    catSheet.getRange(2,1,rows.length,2).setValues(rows);
-  }
-  Logger.log('SETUP SELESAI: ' + ss.getUrl());
-  Logger.log('Password awal: ' + DEFAULT_PASSWORD + ' - segera ganti.');
-}
-
-function ensureSetup_() {
-  const ss = SpreadsheetApp.openById(DB_ID);
-  ensureSheet_(ss,SHEETS.TRANSAKSI,TRANSACTION_HEADERS);
-  ensureSheet_(ss,SHEETS.CONFIG,['Key','Value']);
-  ensureSheet_(ss,SHEETS.KATEGORI,['Jenis','Kategori']);
-  ensureSheet_(ss,SHEETS.AUDIT,AUDIT_HEADERS);
-  const props=PropertiesService.getScriptProperties();
-  if (!props.getProperty('SPREADSHEET_ID')) props.setProperty('SPREADSHEET_ID',DB_ID);
-  if (!props.getProperty('ADMIN_PASSWORD_HASH')) props.setProperty('ADMIN_PASSWORD_HASH',hash_(DEFAULT_PASSWORD));
-  const cs=ss.getSheetByName(SHEETS.CONFIG);
-  const c=readConfig_(cs);
-  const d={nama_rt:'RT 01',nama_rw:'RW 01',dukuh:'Dukuh Gudang',desa:'Desa Surorejan',kecamatan:'Kecamatan Puring',kabupaten:'Kabupaten Kebumen',ketua_rt:'',bendahara:'',saldo_awal:'0'};
-  Object.keys(d).forEach(k=>{if(!(k in c))upsertConfig_(cs,k,d[k]);});
-  const ks=ss.getSheetByName(SHEETS.KATEGORI);
-  if(ks.getLastRow()<2){const rows=[];Object.keys(DEFAULT_CATEGORIES).forEach(j=>DEFAULT_CATEGORIES[j].forEach(x=>rows.push([j,x])));ks.getRange(2,1,rows.length,2).setValues(rows);}
-}
-
-function health_(){ return {success:true,status:'OK',app:'Kas RT 01 / RW 01',time:new Date().toISOString(),spreadsheetId:DB_ID}; }
-
-function initialData_() {
-  return {
-    success:true,
-    config:readConfig_(getSpreadsheet_().getSheetByName(SHEETS.CONFIG)),
-    categories:readCategories_(),
-    transactions:normalizeTransactionsForApi_(getTransactions_()),
-    dashboard:getDashboard_()
-  };
-}
-
-function getDashboard_() {
-  const c=readConfig_(getSpreadsheet_().getSheetByName(SHEETS.CONFIG));
-  const tx=getTransactions_();
-  let pemasukan=0,pengeluaran=0,jumlahTransaksi=0;
-
-  tx.forEach(x=>{
-    const status=String(x.Status||'').toUpperCase();
-    if(status!=='AKTIF') return;
-
-    const nominal=Number(x.Nominal)||0;
-    const jenis=String(x.Jenis||'');
-
-    if(jenis==='Pemasukan') pemasukan+=nominal;
-    else if(jenis==='Pengeluaran') pengeluaran+=nominal;
-
-    jumlahTransaksi++;
-  });
-
-  const saldoAwal=Number(c.saldo_awal||0);
-  return {
-    saldoAwal,
-    pemasukan,
-    pengeluaran,
-    saldo:saldoAwal+pemasukan-pengeluaran,
-    jumlahTransaksi
-  };
-}
-
-function getTransactions_() {
-  const s=getSpreadsheet_().getSheetByName(SHEETS.TRANSAKSI);
-  if(s.getLastRow()<2)return [];
-  const values=s.getRange(1,1,s.getLastRow(),s.getLastColumn()).getValues();
-  const headers=values.shift().map(String);
-  return values.map(r=>{const o={};headers.forEach((h,i)=>o[h]=serialize_(r[i],h));return o;}).filter(o=>o.ID).reverse();
-}
-
-function createTransaction_(p) {
-  const jenis=String(p.jenis||'');
-  if(!['Pemasukan','Pengeluaran'].includes(jenis)) throw new Error('Jenis transaksi tidak valid.');
-  const nominal=Number(p.nominal);
-  if(!Number.isFinite(nominal)||nominal<=0)throw new Error('Nominal harus lebih besar dari 0.');
-  if(!p.tanggal||!p.waktu||!p.kategori||!p.keterangan)throw new Error('Tanggal, waktu, kategori, dan keterangan wajib diisi.');
-  const id='TRX-'+Utilities.formatDate(new Date(),TZ,'yyyyMMdd-HHmmss')+'-'+Utilities.getUuid().slice(0,6).toUpperCase();
-  const now=new Date();
-  const row=[id,now,String(p.tanggal),String(p.waktu),jenis,String(p.kategori),nominal,String(p.keterangan),String(p.catatan||''),'AKTIF',String(p.buktiUrl||''),now];
-  getSpreadsheet_().getSheetByName(SHEETS.TRANSAKSI).appendRow(row);
-  audit_('CREATE',id,'',{},rowToObject_(row,TRANSACTION_HEADERS));
-  SpreadsheetApp.flush();
-
-  const transaction=rowToObject_(row,TRANSACTION_HEADERS);
-
-  return {
-    success:true,
-    message:'Transaksi berhasil disimpan di database.',
-    id,
-    transaction:normalizeTransaction_(transaction),
-    dashboard:getDashboard_()
-  };
-}
-
-function updateTransaction_(p) {
-  requirePassword_(p.password);
-  if(!p.transactionId||!p.reason)throw new Error('ID transaksi dan alasan perubahan wajib diisi.');
-  const found=findTransaction_(p.transactionId); if(!found)throw new Error('Transaksi tidak ditemukan.');
-  const before=found.object;
-  if(String(before.Status||'').toUpperCase()!=='AKTIF')throw new Error('Transaksi yang sudah dibatalkan tidak dapat diedit.');
-  const d=p.data||{};
-  const nominal=Number(d.nominal); if(!Number.isFinite(nominal)||nominal<=0)throw new Error('Nominal tidak valid.');
-  const after=Object.assign({},before,{Tanggal:String(d.tanggal||before.Tanggal),Waktu:String(d.waktu||before.Waktu),Jenis:String(d.jenis||before.Jenis),Kategori:String(d.kategori||before.Kategori),Nominal:nominal,Keterangan:String(d.keterangan||before.Keterangan),Catatan:String(d.catatan??before.Catatan),UpdatedAt:new Date()});
-  const sheet=found.sheet; const row=found.row;
-  const vals=TRANSACTION_HEADERS.map(h=>after[h]??'');
-  sheet.getRange(row,1,1,TRANSACTION_HEADERS.length).setValues([vals]);
-  audit_('UPDATE',p.transactionId,String(p.reason),before,after);
-  SpreadsheetApp.flush();
-
-  const refreshed=findTransaction_(p.transactionId);
-  return {
-    success:true,
-    message:'Transaksi berhasil diperbarui di database.',
-    transaction:refreshed?normalizeTransaction_(refreshed.object):null,
-    dashboard:getDashboard_()
-  };
-}
-
-function cancelTransaction_(p) {
-  requirePassword_(p.password);
-  if(!p.transactionId||!p.reason)throw new Error('ID transaksi dan alasan pembatalan wajib diisi.');
-  const found=findTransaction_(p.transactionId);if(!found)throw new Error('Transaksi tidak ditemukan.');
-  const before=found.object;if(String(before.Status||'').toUpperCase()!=='AKTIF')throw new Error('Transaksi sudah dibatalkan.');
-  found.sheet.getRange(found.row,10).setValue('DIBATALKAN');
-  found.sheet.getRange(found.row,12).setValue(new Date());
-  const after=Object.assign({},before,{Status:'DIBATALKAN',UpdatedAt:new Date()});
-  audit_('CANCEL',p.transactionId,String(p.reason),before,after);
-  SpreadsheetApp.flush();
-
-  const refreshed=findTransaction_(p.transactionId);
-  return {
-    success:true,
-    message:'Transaksi dibatalkan dan histori tetap tersimpan di database.',
-    transaction:refreshed?normalizeTransaction_(refreshed.object):null,
-    dashboard:getDashboard_()
-  };
-}
-
-function updateConfig_(p) {
-  requirePassword_(p.password); const c=p.config||{};
-  const sheet=getSpreadsheet_().getSheetByName(SHEETS.CONFIG);
-  Object.keys(c).forEach(k=>upsertConfig_(sheet,k,c[k]));
-  audit_('CONFIG','','Perubahan pengaturan',{},c);
-  return {success:true,message:'Pengaturan berhasil disimpan.'};
-}
-
-function changePassword_(p) {
-  requirePassword_(p.currentPassword);
-  const np=String(p.newPassword||''); if(np.length<8)throw new Error('Password baru minimal 8 karakter.');
-  PropertiesService.getScriptProperties().setProperty('ADMIN_PASSWORD_HASH',hash_(np));
-  audit_('PASSWORD','','Ganti password',{},{});
-  return {success:true,message:'Password berhasil diganti.'};
-}
-
-function exportReport_(p) {
-  const start=String(p.startDate||''); const end=String(p.endDate||'');
-  const tx=getTransactions_().filter(x=>String(x.Status||'').toUpperCase()==='AKTIF'&&(!start||x.Tanggal>=start)&&(!end||x.Tanggal<=end));
-  const c=readConfig_(getSpreadsheet_().getSheetByName(SHEETS.CONFIG));
-  let income=0,expense=0;tx.forEach(x=>x.Jenis==='Pemasukan'?income+=Number(x.Nominal):expense+=Number(x.Nominal));
-  const doc=DocumentApp.create('Laporan Kas RT - '+(start||'awal')+' s.d. '+(end||'sekarang'));
-  const body=doc.getBody();
-  body.appendParagraph(c.nama_rt+' / '+c.nama_rw).setHeading(DocumentApp.ParagraphHeading.TITLE);
-  body.appendParagraph([c.dukuh,c.desa,c.kecamatan,c.kabupaten].filter(Boolean).join(' · '));
-  body.appendParagraph('Laporan Kas Periode '+(start||'-')+' s.d. '+(end||'-')).setHeading(DocumentApp.ParagraphHeading.HEADING2);
-  body.appendParagraph('Saldo awal: Rp '+formatMoney_(Number(c.saldo_awal||0)));
-  body.appendParagraph('Pemasukan: Rp '+formatMoney_(income));
-  body.appendParagraph('Pengeluaran: Rp '+formatMoney_(expense));
-  body.appendParagraph('Saldo periode: Rp '+formatMoney_(Number(c.saldo_awal||0)+income-expense));
-  body.appendParagraph('');
-  const table=[['Tanggal','Jenis','Kategori','Keterangan','Nominal']];
-  tx.slice().reverse().forEach(x=>table.push([x.Tanggal,x.Jenis,x.Kategori,x.Keterangan,'Rp '+formatMoney_(Number(x.Nominal))]));
-  if(table.length>1)body.appendTable(table);
-  body.appendParagraph('');body.appendParagraph('Dibuat otomatis oleh Kas RT 01 / RW 01 pada '+Utilities.formatDate(new Date(),TZ,'dd/MM/yyyy HH:mm'));
-  doc.saveAndClose();
-  const pdf=DriveApp.getFileById(doc.getId()).getAs(MimeType.PDF); const folder=getReportFolder_(); const file=folder.createFile(pdf).setName(doc.getName()+'.pdf');
-  DriveApp.getFileById(doc.getId()).setTrashed(true);
-  return {success:true,url:file.getUrl(),fileId:file.getId(),name:file.getName()};
-}
-
-function reportSummary_(){
-  const c=readConfig_(getSpreadsheet_().getSheetByName(SHEETS.CONFIG));
-  const dashboard=getDashboard_();
-
-  return {
-    success:true,
-    date:Utilities.formatDate(new Date(),TZ,'d/M/yyyy'),
-    nama_rt:c.nama_rt||'RT 01',
-    nama_rw:c.nama_rw||'RW 01',
-    dukuh:c.dukuh||'Dukuh Gudang',
-    desa:c.desa||'Desa Surorejan',
-    kecamatan:c.kecamatan||'Kecamatan Puring',
-    kabupaten:c.kabupaten||'Kabupaten Kebumen',
-    saldoAwal:dashboard.saldoAwal,
-    pemasukan:dashboard.pemasukan,
-    pengeluaran:dashboard.pengeluaran,
-    saldo:dashboard.saldo
-  };
-}
-
-function normalizeTransaction_(x){
-  return {
-    id:String(x.ID||''),
-    timestamp:x.Timestamp||'',
-    tanggal:String(x.Tanggal||''),
-    waktu:String(x.Waktu||''),
-    jenis:String(x.Jenis||''),
-    kategori:String(x.Kategori||''),
-    nominal:Number(x.Nominal)||0,
-    keterangan:String(x.Keterangan||''),
-    catatan:String(x.Catatan||''),
-    status:String(x.Status||''),
-    buktiUrl:String(x.BuktiURL||''),
-    updatedAt:x.UpdatedAt||''
-  };
-}
-
-function normalizeTransactionsForApi_(items){
-  return (items||[]).map(normalizeTransaction_);
-}
-
-function getReportFolder_(){
-  const props=PropertiesService.getScriptProperties();let id=props.getProperty('REPORT_FOLDER_ID');
-  if(id){try{return DriveApp.getFolderById(id);}catch(e){}}
-  const f=DriveApp.createFolder('Kas RT 01 - Laporan');props.setProperty('REPORT_FOLDER_ID',f.getId());return f;
-}
-
-function findTransaction_(id){
-  const s=getSpreadsheet_().getSheetByName(SHEETS.TRANSAKSI);if(s.getLastRow()<2)return null;
-  const vals=s.getRange(2,1,s.getLastRow()-1,TRANSACTION_HEADERS.length).getValues();
-  for(let i=0;i<vals.length;i++){if(String(vals[i][0])===String(id))return {sheet:s,row:i+2,object:rowToObject_(vals[i],TRANSACTION_HEADERS)};}
-  return null;
-}
-
-function readCategories_(){
-  const s=getSpreadsheet_().getSheetByName(SHEETS.KATEGORI);const out={Pemasukan:[],Pengeluaran:[]};
-  if(s.getLastRow()<2)return out;s.getRange(2,1,s.getLastRow()-1,2).getValues().forEach(r=>{if(out[r[0]])out[r[0]].push(String(r[1]));});return out;
-}
-function readConfig_(s){const o={};if(s.getLastRow()<2)return o;s.getRange(2,1,s.getLastRow()-1,2).getValues().forEach(r=>{if(r[0])o[String(r[0])]=r[1];});return o;}
-function upsertConfig_(s,key,value){const last=s.getLastRow();if(last>=2){const vals=s.getRange(2,1,last-1,1).getValues();for(let i=0;i<vals.length;i++){if(String(vals[i][0])===String(key)){s.getRange(i+2,2).setValue(value);return;}}}s.appendRow([key,value]);}
-function audit_(action,id,reason,before,after){getSpreadsheet_().getSheetByName(SHEETS.AUDIT).appendRow([new Date(),action,id,reason,'admin',JSON.stringify(before),JSON.stringify(after)]);}
-function requirePassword_(p){if(!p||hash_(String(p))!==PropertiesService.getScriptProperties().getProperty('ADMIN_PASSWORD_HASH'))throw new Error('Password admin salah.');}
+function getTransactions_(){const s=ss_().getSheetByName(SHEETS.TRANSAKSI);if(s.getLastRow()<2)return[];const v=s.getRange(1,1,s.getLastRow(),Math.max(s.getLastColumn(),HEADERS.length)).getValues(),h=v.shift().map(String);return v.map(r=>{const o={};h.forEach((x,i)=>o[x]=serialize_(r[i],x));return o}).filter(x=>x.ID).reverse();}
+function find_(id){const s=ss_().getSheetByName(SHEETS.TRANSAKSI),n=s.getLastRow();if(n<2)return null;const v=s.getRange(2,1,n-1,HEADERS.length).getValues();for(let i=0;i<v.length;i++)if(String(v[i][0])===String(id))return{sheet:s,row:i+2,object:obj_(v[i])};return null;}
+function normalize_(x){return{id:String(x.ID||''),timestamp:x.Timestamp||'',tanggal:String(x.Tanggal||''),waktu:String(x.Waktu||''),jenis:String(x.Jenis||''),kategori:String(x.Kategori||''),nominal:Number(x.Nominal)||0,keterangan:String(x.Keterangan||''),catatan:String(x.Catatan||''),status:String(x.Status||'').toUpperCase(),buktiUrl:String(x.BuktiURL||''),updatedAt:x.UpdatedAt||''};}
+function obj_(r){const o={};HEADERS.forEach((h,i)=>o[h]=serialize_(r[i],h));return o;}
+function readConfig_(){const s=ss_().getSheetByName(SHEETS.CONFIG),o={};if(s.getLastRow()<2)return o;s.getRange(2,1,s.getLastRow()-1,2).getValues().forEach(r=>{if(r[0])o[String(r[0])]=r[1]});return o;}
+function setConfig_(k,v){const s=ss_().getSheetByName(SHEETS.CONFIG),n=s.getLastRow();if(n>=2){const vls=s.getRange(2,1,n-1,1).getValues();for(let i=0;i<vls.length;i++)if(String(vls[i][0])===String(k)){s.getRange(i+2,2).setValue(v);return;}}s.appendRow([k,v]);}
+function readCategories_(){const s=ss_().getSheetByName(SHEETS.KATEGORI),o={Pemasukan:[],Pengeluaran:[]};if(s.getLastRow()<2)return o;s.getRange(2,1,s.getLastRow()-1,2).getValues().forEach(r=>{if(o[r[0]])o[r[0]].push(String(r[1]))});return o;}
+function audit_(a,id,r,b,af){ss_().getSheetByName(SHEETS.AUDIT).appendRow([new Date(),a,id,r,'admin',JSON.stringify(b),JSON.stringify(af)]);}
+function auth_(p){if(!p||hash_(String(p))!==PropertiesService.getScriptProperties().getProperty('ADMIN_PASSWORD_HASH'))throw Error('Password admin salah.');}
 function hash_(s){return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,String(s),Utilities.Charset.UTF_8).map(b=>(b<0?b+256:b).toString(16).padStart(2,'0')).join('');}
-function parseBody_(e){if(!e||!e.postData||!e.postData.contents)return {};const raw=e.postData.contents;try{return JSON.parse(raw);}catch(err){const p={};raw.split('&').forEach(x=>{const a=x.split('=');if(a[0])p[decodeURIComponent(a[0])]=decodeURIComponent(a.slice(1).join('='));});return p;}}
-function json_(o){return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON);}
-function getSpreadsheet_(){return SpreadsheetApp.openById(PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID')||DB_ID);}
-function ensureSheet_(ss,name,headers){let s=ss.getSheetByName(name);if(!s)s=ss.insertSheet(name);if(s.getLastRow()===0)s.getRange(1,1,1,headers.length).setValues([headers]);return s;}
-function rowToObject_(row,headers){const o={};headers.forEach((h,i)=>o[h]=serialize_(row[i],h));return o;}
-function serialize_(v,h){if(v instanceof Date)return Utilities.formatDate(v,TZ,h==='Tanggal'?'yyyy-MM-dd':h==='Waktu'?'HH:mm':'yyyy-MM-dd HH:mm:ss');return v;}
-function formatMoney_(n){return Number(n||0).toLocaleString('id-ID');}
+function parse_(e){if(!e?.postData?.contents)return{};try{return JSON.parse(e.postData.contents)}catch(_){const o={};e.postData.contents.split('&').forEach(x=>{const a=x.split('=');if(a[0])o[decodeURIComponent(a[0])]=decodeURIComponent(a.slice(1).join('='))});return o}}
+function json_(o){return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON)}
+function ss_(){return SpreadsheetApp.openById(DB_ID)}
+function sheet_(n,h){let s=ss_().getSheetByName(n);if(!s)s=ss_().insertSheet(n);if(s.getLastRow()===0)s.getRange(1,1,1,h.length).setValues([h]);return s}
+function serialize_(v,h){if(v instanceof Date)return Utilities.formatDate(v,TZ,h==='Tanggal'?'yyyy-MM-dd':h==='Waktu'?'HH:mm':'yyyy-MM-dd HH:mm:ss');return v}
+function money_(n){return Number(n||0).toLocaleString('id-ID')}
+function getReportFolder_(){const p=PropertiesService.getScriptProperties(),id=p.getProperty('REPORT_FOLDER_ID');if(id){try{return DriveApp.getFolderById(id)}catch(_){}}const f=DriveApp.createFolder('Kas RT 01 - Laporan');p.setProperty('REPORT_FOLDER_ID',f.getId());return f}
