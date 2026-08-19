@@ -20,7 +20,7 @@ function calculateDashboardFromServerTransactions(){
   const saldoAwal=Number(c.saldo_awal||0);
   state.dashboard={saldoAwal,pemasukan,pengeluaran,saldo:saldoAwal+pemasukan-pengeluaran,jumlahTransaksi:active.length};
 }
-function renderDashboard(){ calculateDashboardFromServerTransactions(); const d=state.dashboard||{}; $('saldo').textContent=rupiah(d.saldo); $('pemasukan').textContent=rupiah(d.pemasukan); $('pengeluaran').textContent=rupiah(d.pengeluaran); $('jumlahTransaksi').textContent=d.jumlahTransaksi||0; $('saldoMeta').textContent='Saldo dihitung dari transaksi AKTIF di database'; const c=state.config||{}; setDbStatus(true,'Database tersambung • data terbaru dari server'); const rows=state.transactions.filter(t=>String(t.status||'').toUpperCase()==='AKTIF').slice(0,8); $('recentTable').innerHTML=tableHtml(rows,false); }
+function renderDashboard(){ calculateDashboardFromServerTransactions(); const d=state.dashboard||{}; $('saldo').textContent=rupiah(d.saldo); $('pemasukan').textContent=rupiah(d.pemasukan); $('pengeluaran').textContent=rupiah(d.pengeluaran); $('jumlahTransaksi').textContent=d.jumlahTransaksi||0; $('saldoMeta').textContent='Saldo dihitung dari transaksi AKTIF di database'; setDbStatus(true,'Database tersambung • data terbaru dari server'); const rows=state.transactions.filter(t=>String(t.status||'').toUpperCase()==='AKTIF').slice(0,8); $('recentTable').innerHTML=tableHtml(rows,false); }
 function typeBadge(t){return `<span class="badge ${t==='Pemasukan'?'in':'out'}">${esc(t)}</span>`;}
 function tableHtml(rows,actions=true){if(!rows.length)return '<div class="empty">Belum ada transaksi.</div>';return `<table><thead><tr><th>ID</th><th>Tanggal</th><th>Jenis</th><th>Kategori</th><th>Keterangan</th><th>Nominal</th><th>Status</th>${actions?'<th>Aksi</th>':''}</tr></thead><tbody>${rows.map(t=>{const active=String(t.status||'').toUpperCase()==='AKTIF';return `<tr><td>${esc(t.id)}</td><td>${esc(t.tanggal)}</td><td>${typeBadge(t.jenis)}</td><td>${esc(t.kategori)}</td><td>${esc(t.keterangan)}</td><td class="${t.jenis==='Pemasukan'?'income':'expense'}">${t.jenis==='Pemasukan'?'+':'-'} ${rupiah(t.nominal)}</td><td>${active?'<span class="badge in">AKTIF</span>':'<span class="badge cancel">DIBATALKAN</span>'}</td>${actions?`<td>${active?`<button class="btn ghost" data-edit="${esc(t.id)}">Edit</button> <button class="btn danger" data-cancel="${esc(t.id)}">Batal</button>`:'-'}</td>`:''}</tr>`;}).join('')}</tbody></table>`;}
 function renderCategories(){const list=state.categories?.[state.selectedType]||[];$('kategori').innerHTML='<option value="">Pilih kategori</option>'+list.map(x=>`<option>${esc(x)}</option>`).join('');}
@@ -31,6 +31,32 @@ function closeModal(id){$(id).classList.remove('show');$(id).setAttribute('aria-
 async function load(){setDbStatus(false,'Mengambil data terbaru dari database...');try{const data=await KasApi.getInitialData();if(!data||!Array.isArray(data.transactions))throw new Error('Server tidak mengirim daftar transaksi yang valid.');state={...state,...data,transactions:data.transactions.map(KasApi.normalizeTransaction)};renderConfig();renderCategories();renderDashboard();renderTransactions();}catch(e){setDbStatus(false,'Database gagal diakses');errorToast(e);}}
 function renderConfig(){const c=state.config||{};[['admin_rt','nama_rt'],['admin_rw','nama_rw'],['admin_dukuh','dukuh'],['admin_desa','desa'],['admin_kecamatan','kecamatan'],['admin_kabupaten','kabupaten'],['admin_ketua','ketua_rt'],['admin_bendahara','bendahara'],['admin_saldo','saldo_awal']].forEach(([a,b])=>$(a).value=c[b]??'');}
 async function reload(){await load();toast('✓ Data dikonfirmasi ulang dari database.');}
+function formatDateID(value){ if(!value)return '-'; const d=new Date(value+'T00:00:00'); return Number.isNaN(d.getTime())?value:d.toLocaleDateString('id-ID',{day:'numeric',month:'numeric',year:'numeric'}); }
+function buildWhatsAppReport(){
+  calculateDashboardFromServerTransactions();
+  const d=state.dashboard||{};
+  const c=state.config||{};
+  const today=new Date().toLocaleDateString('id-ID',{day:'numeric',month:'numeric',year:'numeric'});
+  const lines=[
+    '*LAPORAN KAS '+(c.nama_rt||'RT 01')+' '+(c.nama_rw||'RW 01')+'*',
+    [c.dukuh,c.desa].filter(Boolean).join(', '),
+    'Per Tanggal: '+today,
+    '',
+    'Saldo Awal: '+rupiah(d.saldoAwal),
+    'Total Pemasukan: '+rupiah(d.pemasukan),
+    'Total Pengeluaran: '+rupiah(d.pengeluaran),
+    '-----------------------------------',
+    '*SISA SALDO SEKARANG: '+rupiah(d.saldo)+'*',
+    '',
+    'Catatan: Transaksi dicatat secara otomatis via Aplikasi Kas RT.'
+  ];
+  return lines.join('\n');
+}
+function shareWhatsApp(){
+  const text=buildWhatsAppReport();
+  const url='https://wa.me/?text='+encodeURIComponent(text);
+  window.open(url,'_blank','noopener,noreferrer');
+}
 $('menuBtn').addEventListener('click',()=>$('sidebar').classList.toggle('open'));document.querySelectorAll('.nav-item').forEach(b=>b.addEventListener('click',()=>navigate(b.dataset.page)));document.querySelectorAll('[data-go]').forEach(b=>b.addEventListener('click',()=>navigate(b.dataset.go)));document.querySelectorAll('[data-close]').forEach(b=>b.addEventListener('click',()=>closeModal(b.dataset.close)));document.querySelectorAll('.segment').forEach(b=>b.addEventListener('click',()=>{state.selectedType=b.dataset.type;document.querySelectorAll('.segment').forEach(x=>x.classList.remove('active'));b.classList.add('active');renderCategories();}));['search','filterJenis','filterStart','filterEnd'].forEach(id=>$(id).addEventListener('input',renderTransactions));document.addEventListener('click',e=>{if(e.target.dataset.edit)openEdit(e.target.dataset.edit);if(e.target.dataset.cancel)openCancel(e.target.dataset.cancel);});
 $('transactionForm').addEventListener('reset',()=>setTimeout(()=>{state.selectedType='Pemasukan';document.querySelectorAll('.segment').forEach((x,i)=>x.classList.toggle('active',i===0));renderCategories();setNow();},0));
 $('transactionForm').addEventListener('submit',async e=>{e.preventDefault();const btn=$('saveBtn');btn.disabled=true;btn.textContent='⏳ Menyimpan ke database...';try{const data={tanggal:$('tanggal').value,waktu:$('waktu').value,jenis:state.selectedType,kategori:$('kategori').value,nominal:Number($('nominal').value),keterangan:$('keterangan').value.trim(),catatan:$('catatan').value.trim()};const result=await KasApi.createTransaction(data);toast('✓ Server mengonfirmasi transaksi tersimpan: '+result.id);e.target.reset();await reload();}catch(err){errorToast(err)}finally{btn.disabled=false;btn.textContent='💾 Simpan ke Database';}});
@@ -38,5 +64,6 @@ $('editForm').addEventListener('submit',async e=>{e.preventDefault();try{const c
 $('cancelForm').addEventListener('submit',async e=>{e.preventDefault();try{await KasApi.cancelTransaction({password:$('cancelPassword').value,transactionId:$('cancelId').value,reason:$('cancelReason').value.trim()});closeModal('cancelModal');toast('✓ Pembatalan tersimpan di database.');await reload();}catch(err){errorToast(err)}});
 $('configForm').addEventListener('submit',async e=>{e.preventDefault();const password=prompt('Masukkan password admin:');if(!password)return;try{await KasApi.updateConfig({password,config:{nama_rt:$('admin_rt').value,nama_rw:$('admin_rw').value,dukuh:$('admin_dukuh').value,desa:$('admin_desa').value,kecamatan:$('admin_kecamatan').value,kabupaten:$('admin_kabupaten').value,ketua_rt:$('admin_ketua').value,bendahara:$('admin_bendahara').value,saldo_awal:Number($('admin_saldo').value||0)}});toast('✓ Pengaturan tersimpan di database.');await reload();}catch(err){errorToast(err)}});
 $('passwordForm').addEventListener('submit',async e=>{e.preventDefault();if($('newPassword').value!==$('confirmPassword').value)return toast('Password baru tidak sama.');try{await KasApi.changePassword({currentPassword:$('oldPassword').value,newPassword:$('newPassword').value});toast('✓ Password tersimpan di backend.');e.target.reset();}catch(err){errorToast(err)}});
-$('pdfBtn').addEventListener('click',async()=>{try{const r=await KasApi.exportReport({startDate:$('reportStart').value,endDate:$('reportEnd').value});$('reportResult').innerHTML=`Laporan siap: <a href="${esc(r.url||'#')}" target="_blank">Buka PDF</a>`;}catch(e){errorToast(e)}});$('waBtn').addEventListener('click',async()=>{try{const r=await KasApi.exportReport({startDate:$('reportStart').value,endDate:$('reportEnd').value});const text=`*LAPORAN KAS RT 01 / RW 01*\nPeriode: ${$('reportStart').value} s.d. ${$('reportEnd').value}\n\n📄 ${r.url||'Laporan tersedia di sistem'}`;window.open('https://wa.me/?text='+encodeURIComponent(text),'_blank');}catch(e){errorToast(e)}});
+$('pdfBtn').addEventListener('click',async()=>{try{const r=await KasApi.exportReport({startDate:$('reportStart').value,endDate:$('reportEnd').value});$('reportResult').innerHTML=`Laporan siap: <a href="${esc(r.url||'#')}" target="_blank">Buka PDF</a>`;}catch(e){errorToast(e)}});
+$('waBtn').addEventListener('click',async()=>{try{await reload();shareWhatsApp();}catch(e){errorToast(e)}});
 setNow();load();
