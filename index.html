@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Aplikasi Kas RT 01 RW 01 Dukuh Gudang, Desa Surorejan, Kecamatan Puring, Kabupaten Kebumen.">
+  <title>Kas RT 01 / RW 01</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark">RT</div>
+        <div>
+          <div class="brand-title">Kas RT 01 / RW 01</div>
+          <div class="brand-subtitle">Dukuh Gudang · Desa Surorejan · Puring · Kebumen</div>
+        </div>
+      </div>
+      <button class="menu-btn" id="menuBtn" aria-label="Buka menu">☰</button>
+    </header>
+
+    <aside class="sidebar" id="sidebar">
+      <nav>
+        <button class="nav-item active" data-page="dashboard">⌂ <span>Dashboard</span></button>
+        <button class="nav-item" data-page="transactions">＋ <span>Transaksi</span></button>
+        <button class="nav-item" data-page="reports">▣ <span>Laporan</span></button>
+        <button class="nav-item" data-page="admin">⚙ <span>Admin</span></button>
+      </nav>
+      <div class="sidebar-footer">Pencatatan kas yang transparan dan tertib.</div>
+    </aside>
+
+    <main class="main">
+      <section class="page active" id="page-dashboard">
+        <div class="page-head">
+          <div>
+            <p class="eyebrow">RINGKASAN KEUANGAN</p>
+            <h1>Dashboard Kas RT</h1>
+            <p class="muted" id="connectionStatus">Menghubungkan ke database...</p>
+          </div>
+          <button class="btn primary" data-go="transactions">+ Tambah Transaksi</button>
+        </div>
+
+        <div class="cards">
+          <article class="card balance"><span>Saldo Saat Ini</span><strong id="saldo">Rp 0</strong><small id="saldoMeta">Memuat data...</small></article>
+          <article class="card"><span>Total Pemasukan</span><strong class="income" id="pemasukan">Rp 0</strong><small>Transaksi aktif</small></article>
+          <article class="card"><span>Total Pengeluaran</span><strong class="expense" id="pengeluaran">Rp 0</strong><small>Transaksi aktif</small></article>
+          <article class="card"><span>Jumlah Transaksi</span><strong id="jumlahTransaksi">0</strong><small>Transaksi aktif</small></article>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><div><h2>Transaksi Terbaru</h2><p class="muted">Aktivitas kas terbaru.</p></div><button class="btn ghost" data-go="transactions">Lihat semua</button></div>
+          <div class="table-wrap" id="recentTable"><div class="empty">Memuat transaksi...</div></div>
+        </div>
+      </section>
+
+      <section class="page" id="page-transactions">
+        <div class="page-head"><div><p class="eyebrow">BUKU KAS</p><h1>Transaksi</h1><p class="muted">Catat pemasukan dan pengeluaran secara terstruktur.</p></div></div>
+        <div class="grid-2">
+          <div class="panel">
+            <div class="panel-head"><div><h2>Tambah Transaksi</h2><p class="muted">Semua perubahan sensitif akan membutuhkan otorisasi admin.</p></div></div>
+            <form id="transactionForm" class="form">
+              <div class="segmented"><button type="button" class="segment active" data-type="Pemasukan">Pemasukan</button><button type="button" class="segment" data-type="Pengeluaran">Pengeluaran</button></div>
+              <div class="form-grid">
+                <label>Tanggal<input type="date" id="tanggal" required></label>
+                <label>Waktu<input type="time" id="waktu" required></label>
+                <label>Nominal<input type="number" id="nominal" min="1" step="1" placeholder="500000" required></label>
+                <label>Kategori<select id="kategori" required><option value="">Pilih kategori</option></select></label>
+                <label class="full">Keterangan<input type="text" id="keterangan" maxlength="200" placeholder="Contoh: Iuran kas bulan Agustus" required></label>
+                <label class="full">Catatan<textarea id="catatan" rows="3" placeholder="Opsional"></textarea></label>
+                <label class="full">Bukti transaksi<input type="file" id="bukti" accept="image/*,application/pdf"><small id="uploadStatus"></small></label>
+              </div>
+              <div class="form-actions"><button class="btn ghost" type="reset">Reset</button><button class="btn primary" type="submit" id="saveBtn">Simpan Transaksi</button></div>
+            </form>
+          </div>
+          <div class="panel info-panel"><h2>Prinsip pencatatan</h2><ul><li>Setiap transaksi memiliki ID unik.</li><li>Saldo dihitung dari saldo awal + pemasukan − pengeluaran.</li><li>Edit transaksi tidak menghapus histori.</li><li>Pembatalan transaksi dicatat sebagai <b>DIBATALKAN</b>.</li><li>Perubahan admin dicatat pada audit log.</li></ul></div>
+        </div>
+
+        <div class="panel table-panel">
+          <div class="panel-head"><div><h2>Riwayat Transaksi</h2><p class="muted">Gunakan pencarian dan filter untuk menemukan transaksi.</p></div></div>
+          <div class="filters"><input id="search" placeholder="Cari ID, kategori, keterangan..."><select id="filterJenis"><option value="">Semua jenis</option><option>Pemasukan</option><option>Pengeluaran</option></select><input type="date" id="filterStart"><input type="date" id="filterEnd"></div>
+          <div class="table-wrap" id="transactionTable"><div class="empty">Memuat...</div></div>
+        </div>
+      </section>
+
+      <section class="page" id="page-reports">
+        <div class="page-head"><div><p class="eyebrow">PELAPORAN</p><h1>Laporan Keuangan</h1><p class="muted">Buat laporan periode dan bagikan kepada warga.</p></div></div>
+        <div class="panel report-card">
+          <div class="form-grid">
+            <label>Dari tanggal<input type="date" id="reportStart"></label>
+            <label>Sampai tanggal<input type="date" id="reportEnd"></label>
+          </div>
+          <div class="form-actions"><button class="btn primary" id="pdfBtn">Export PDF</button><button class="btn whatsapp" id="waBtn">Share WhatsApp</button></div>
+          <div id="reportResult" class="result"></div>
+        </div>
+      </section>
+
+      <section class="page" id="page-admin">
+        <div class="page-head"><div><p class="eyebrow">KONTROL SISTEM</p><h1>Administrasi</h1><p class="muted">Pengaturan identitas RT dan keamanan admin.</p></div></div>
+        <div class="grid-2">
+          <div class="panel"><div class="panel-head"><div><h2>Identitas RT</h2><p class="muted">Perubahan pengaturan membutuhkan password admin.</p></div></div>
+            <form id="configForm" class="form"><div class="form-grid">
+              <label>RT<input id="admin_rt"></label><label>RW<input id="admin_rw"></label><label>Dukuh<input id="admin_dukuh"></label><label>Desa<input id="admin_desa"></label><label>Kecamatan<input id="admin_kecamatan"></label><label>Kabupaten<input id="admin_kabupaten"></label><label>Ketua RT<input id="admin_ketua"></label><label>Bendahara<input id="admin_bendahara"></label><label class="full">Saldo awal<input type="number" id="admin_saldo"></label>
+            </div><div class="form-actions"><button class="btn primary" type="submit">Simpan Pengaturan</button></div></form>
+          </div>
+          <div class="panel"><div class="panel-head"><div><h2>Keamanan Admin</h2><p class="muted">Password hanya diproses oleh backend.</p></div></div>
+            <form id="passwordForm" class="form"><label>Password lama<input type="password" id="oldPassword" required></label><label>Password baru<input type="password" id="newPassword" minlength="8" required></label><label>Ulangi password baru<input type="password" id="confirmPassword" minlength="8" required></label><div class="form-actions"><button class="btn primary" type="submit">Ganti Password</button></div></form>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="modal" id="editModal" aria-hidden="true"><div class="modal-box"><button class="modal-close" data-close="editModal">×</button><p class="eyebrow">OTORISASI ADMIN</p><h2>Edit Transaksi</h2><p class="muted">Password dan alasan perubahan wajib diisi.</p><form id="editForm" class="form"><input type="hidden" id="editId"><div id="editFields"></div><label>Password admin<input type="password" id="editPassword" required></label><label>Alasan perubahan<textarea id="editReason" required placeholder="Contoh: salah input nominal"></textarea></label><div class="form-actions"><button type="button" class="btn ghost" data-close="editModal">Batal</button><button class="btn primary">Simpan Perubahan</button></div></form></div></div>
+  <div class="modal" id="cancelModal" aria-hidden="true"><div class="modal-box"><button class="modal-close" data-close="cancelModal">×</button><p class="eyebrow">OTORISASI ADMIN</p><h2>Batalkan Transaksi</h2><p class="muted">Transaksi tidak dihapus. Status akan menjadi DIBATALKAN.</p><form id="cancelForm" class="form"><input type="hidden" id="cancelId"><label>Password admin<input type="password" id="cancelPassword" required></label><label>Alasan pembatalan<textarea id="cancelReason" required></textarea></label><div class="form-actions"><button type="button" class="btn ghost" data-close="cancelModal">Batal</button><button class="btn danger">Batalkan</button></div></form></div></div>
+
+  <div class="toast" id="toast"></div>
+  <script src="js/config.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
