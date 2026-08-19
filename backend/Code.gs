@@ -49,13 +49,14 @@ function route_(action, p) {
   switch (action) {
     case 'health': return health_();
     case 'initialData': return initialData_();
-    case 'transactions': return {success:true,transactions:getTransactions_()};
+    case 'transactions': return {success:true,transactions:normalizeTransactionsForApi_(getTransactions_())};
     case 'createTransaction': return createTransaction_(p);
     case 'updateTransaction': return updateTransaction_(p);
     case 'cancelTransaction': return cancelTransaction_(p);
     case 'updateConfig': return updateConfig_(p);
     case 'changePassword': return changePassword_(p);
     case 'exportReport': return exportReport_(p);
+    case 'reportSummary': return reportSummary_();
     default: throw new Error('Action tidak dikenali: ' + action);
   }
 }
@@ -109,16 +110,41 @@ function ensureSetup_() {
 function health_(){ return {success:true,status:'OK',app:'Kas RT 01 / RW 01',time:new Date().toISOString(),spreadsheetId:DB_ID}; }
 
 function initialData_() {
-  return {success:true,config:readConfig_(getSpreadsheet_().getSheetByName(SHEETS.CONFIG)),categories:readCategories_(),transactions:getTransactions_(),dashboard:getDashboard_()};
+  return {
+    success:true,
+    config:readConfig_(getSpreadsheet_().getSheetByName(SHEETS.CONFIG)),
+    categories:readCategories_(),
+    transactions:normalizeTransactionsForApi_(getTransactions_()),
+    dashboard:getDashboard_()
+  };
 }
 
 function getDashboard_() {
   const c=readConfig_(getSpreadsheet_().getSheetByName(SHEETS.CONFIG));
-  const tx=getTransactions_().filter(x=>x.status==='AKTIF');
-  let pemasukan=0,pengeluaran=0;
-  tx.forEach(x=>x.jenis==='Pemasukan'?pemasukan+=Number(x.nominal):pengeluaran+=Number(x.nominal));
+  const tx=getTransactions_();
+  let pemasukan=0,pengeluaran=0,jumlahTransaksi=0;
+
+  tx.forEach(x=>{
+    const status=String(x.Status||'').toUpperCase();
+    if(status!=='AKTIF') return;
+
+    const nominal=Number(x.Nominal)||0;
+    const jenis=String(x.Jenis||'');
+
+    if(jenis==='Pemasukan') pemasukan+=nominal;
+    else if(jenis==='Pengeluaran') pengeluaran+=nominal;
+
+    jumlahTransaksi++;
+  });
+
   const saldoAwal=Number(c.saldo_awal||0);
-  return {saldoAwal,pemasukan,pengeluaran,saldo:saldoAwal+pemasukan-pengeluaran,jumlahTransaksi:tx.length};
+  return {
+    saldoAwal,
+    pemasukan,
+    pengeluaran,
+    saldo:saldoAwal+pemasukan-pengeluaran,
+    jumlahTransaksi
+  };
 }
 
 function getTransactions_() {
@@ -140,7 +166,17 @@ function createTransaction_(p) {
   const row=[id,now,String(p.tanggal),String(p.waktu),jenis,String(p.kategori),nominal,String(p.keterangan),String(p.catatan||''),'AKTIF',String(p.buktiUrl||''),now];
   getSpreadsheet_().getSheetByName(SHEETS.TRANSAKSI).appendRow(row);
   audit_('CREATE',id,'',{},rowToObject_(row,TRANSACTION_HEADERS));
-  return {success:true,message:'Transaksi berhasil disimpan.',id};
+  SpreadsheetApp.flush();
+
+  const transaction=rowToObject_(row,TRANSACTION_HEADERS);
+
+  return {
+    success:true,
+    message:'Transaksi berhasil disimpan di database.',
+    id,
+    transaction:normalizeTransaction_(transaction),
+    dashboard:getDashboard_()
+  };
 }
 
 function updateTransaction_(p) {
@@ -148,7 +184,7 @@ function updateTransaction_(p) {
   if(!p.transactionId||!p.reason)throw new Error('ID transaksi dan alasan perubahan wajib diisi.');
   const found=findTransaction_(p.transactionId); if(!found)throw new Error('Transaksi tidak ditemukan.');
   const before=found.object;
-  if(before.status!=='AKTIF')throw new Error('Transaksi yang sudah dibatalkan tidak dapat diedit.');
+  if(String(before.Status||'').toUpperCase()!=='AKTIF')throw new Error('Transaksi yang sudah dibatalkan tidak dapat diedit.');
   const d=p.data||{};
   const nominal=Number(d.nominal); if(!Number.isFinite(nominal)||nominal<=0)throw new Error('Nominal tidak valid.');
   const after=Object.assign({},before,{Tanggal:String(d.tanggal||before.Tanggal),Waktu:String(d.waktu||before.Waktu),Jenis:String(d.jenis||before.Jenis),Kategori:String(d.kategori||before.Kategori),Nominal:nominal,Keterangan:String(d.keterangan||before.Keterangan),Catatan:String(d.catatan??before.Catatan),UpdatedAt:new Date()});
@@ -156,19 +192,35 @@ function updateTransaction_(p) {
   const vals=TRANSACTION_HEADERS.map(h=>after[h]??'');
   sheet.getRange(row,1,1,TRANSACTION_HEADERS.length).setValues([vals]);
   audit_('UPDATE',p.transactionId,String(p.reason),before,after);
-  return {success:true,message:'Transaksi berhasil diperbarui.'};
+  SpreadsheetApp.flush();
+
+  const refreshed=findTransaction_(p.transactionId);
+  return {
+    success:true,
+    message:'Transaksi berhasil diperbarui di database.',
+    transaction:refreshed?normalizeTransaction_(refreshed.object):null,
+    dashboard:getDashboard_()
+  };
 }
 
 function cancelTransaction_(p) {
   requirePassword_(p.password);
   if(!p.transactionId||!p.reason)throw new Error('ID transaksi dan alasan pembatalan wajib diisi.');
   const found=findTransaction_(p.transactionId);if(!found)throw new Error('Transaksi tidak ditemukan.');
-  const before=found.object;if(before.status!=='AKTIF')throw new Error('Transaksi sudah dibatalkan.');
+  const before=found.object;if(String(before.Status||'').toUpperCase()!=='AKTIF')throw new Error('Transaksi sudah dibatalkan.');
   found.sheet.getRange(found.row,10).setValue('DIBATALKAN');
   found.sheet.getRange(found.row,12).setValue(new Date());
   const after=Object.assign({},before,{Status:'DIBATALKAN',UpdatedAt:new Date()});
   audit_('CANCEL',p.transactionId,String(p.reason),before,after);
-  return {success:true,message:'Transaksi dibatalkan dan histori tetap tersimpan.'};
+  SpreadsheetApp.flush();
+
+  const refreshed=findTransaction_(p.transactionId);
+  return {
+    success:true,
+    message:'Transaksi dibatalkan dan histori tetap tersimpan di database.',
+    transaction:refreshed?normalizeTransaction_(refreshed.object):null,
+    dashboard:getDashboard_()
+  };
 }
 
 function updateConfig_(p) {
@@ -189,7 +241,7 @@ function changePassword_(p) {
 
 function exportReport_(p) {
   const start=String(p.startDate||''); const end=String(p.endDate||'');
-  const tx=getTransactions_().filter(x=>x.status==='AKTIF'&&(!start||x.Tanggal>=start)&&(!end||x.Tanggal<=end));
+  const tx=getTransactions_().filter(x=>String(x.Status||'').toUpperCase()==='AKTIF'&&(!start||x.Tanggal>=start)&&(!end||x.Tanggal<=end));
   const c=readConfig_(getSpreadsheet_().getSheetByName(SHEETS.CONFIG));
   let income=0,expense=0;tx.forEach(x=>x.Jenis==='Pemasukan'?income+=Number(x.Nominal):expense+=Number(x.Nominal));
   const doc=DocumentApp.create('Laporan Kas RT - '+(start||'awal')+' s.d. '+(end||'sekarang'));
@@ -210,6 +262,47 @@ function exportReport_(p) {
   const pdf=DriveApp.getFileById(doc.getId()).getAs(MimeType.PDF); const folder=getReportFolder_(); const file=folder.createFile(pdf).setName(doc.getName()+'.pdf');
   DriveApp.getFileById(doc.getId()).setTrashed(true);
   return {success:true,url:file.getUrl(),fileId:file.getId(),name:file.getName()};
+}
+
+function reportSummary_(){
+  const c=readConfig_(getSpreadsheet_().getSheetByName(SHEETS.CONFIG));
+  const dashboard=getDashboard_();
+
+  return {
+    success:true,
+    date:Utilities.formatDate(new Date(),TZ,'d/M/yyyy'),
+    nama_rt:c.nama_rt||'RT 01',
+    nama_rw:c.nama_rw||'RW 01',
+    dukuh:c.dukuh||'Dukuh Gudang',
+    desa:c.desa||'Desa Surorejan',
+    kecamatan:c.kecamatan||'Kecamatan Puring',
+    kabupaten:c.kabupaten||'Kabupaten Kebumen',
+    saldoAwal:dashboard.saldoAwal,
+    pemasukan:dashboard.pemasukan,
+    pengeluaran:dashboard.pengeluaran,
+    saldo:dashboard.saldo
+  };
+}
+
+function normalizeTransaction_(x){
+  return {
+    id:String(x.ID||''),
+    timestamp:x.Timestamp||'',
+    tanggal:String(x.Tanggal||''),
+    waktu:String(x.Waktu||''),
+    jenis:String(x.Jenis||''),
+    kategori:String(x.Kategori||''),
+    nominal:Number(x.Nominal)||0,
+    keterangan:String(x.Keterangan||''),
+    catatan:String(x.Catatan||''),
+    status:String(x.Status||''),
+    buktiUrl:String(x.BuktiURL||''),
+    updatedAt:x.UpdatedAt||''
+  };
+}
+
+function normalizeTransactionsForApi_(items){
+  return (items||[]).map(normalizeTransaction_);
 }
 
 function getReportFolder_(){
