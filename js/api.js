@@ -1,23 +1,8 @@
 const KasApi=(()=>{
   function normalizeTransaction(t){if(!t)return t;return{id:t.id??t.ID??'',timestamp:t.timestamp??t.Timestamp??'',tanggal:t.tanggal??t.Tanggal??'',waktu:t.waktu??t.Waktu??'',jenis:t.jenis??t.Jenis??'',kategori:t.kategori??t.Kategori??'',nominal:Number(t.nominal??t.Nominal??0),keterangan:t.keterangan??t.Keterangan??'',catatan:t.catatan??t.Catatan??'',status:String(t.status??t.Status??'').trim().toUpperCase(),buktiUrl:t.buktiUrl??t.BuktiURL??'',updatedAt:t.updatedAt??t.UpdatedAt??''}}
   function normalizeData(d){if(Array.isArray(d?.transactions))d.transactions=d.transactions.map(normalizeTransaction);return d}
-  async function request(action,o={}){
-    const url=window.KASRT_CONFIG.apiUrl;if(!url)throw Error('URL database/API belum dikonfigurasi.');
-    const method=o.method||'GET';
-    let target=url;
-    const opt={method,redirect:'follow',cache:'no-store',credentials:'omit'};
-    if(method==='GET'){
-      target=`${url}?action=${encodeURIComponent(action)}${o.query||''}&_=${Date.now()}`;
-    }else{
-      // Apps Script Web Apps can reject a browser preflight. text/plain is a CORS-safelisted content type;
-      // do not add custom headers that force OPTIONS/preflight.
-      opt.headers={'Content-Type':'text/plain;charset=utf-8'};
-      opt.body=JSON.stringify({...o.body,action});
-    }
-    let r;
-    try{r=await fetch(target,opt)}catch(err){throw Error('Gagal menghubungi server Google Apps Script. Pastikan deployment Web App aktif dan aksesnya dapat digunakan dari browser. Detail: '+(err?.message||'Failed to fetch'))}
-    const text=await r.text();let d;try{d=JSON.parse(text)}catch(_){throw Error('Backend tidak mengembalikan JSON yang valid: '+text.slice(0,200))}
-    if(!r.ok||d.success===false)throw Error(d.message||'Request gagal.');return normalizeData(d)
-  }
-  return{normalizeTransaction,getInitialData:()=>request('initialData'),getTransactions:(query='')=>request('transactions',{query}),getReportSummary:()=>request('reportSummary'),createTransaction:b=>request('createTransaction',{method:'POST',body:b}),updateTransaction:b=>request('updateTransaction',{method:'POST',body:b}),cancelTransaction:b=>request('cancelTransaction',{method:'POST',body:b}),updateConfig:b=>request('updateConfig',{method:'POST',body:b}),changePassword:b=>request('changePassword',{method:'POST',body:b}),exportReport:b=>request('exportReport',{method:'POST',body:b})};
+  async function get(action,query=''){const url=window.KASRT_CONFIG.apiUrl;if(!url)throw Error('URL database/API belum dikonfigurasi.');const target=`${url}?action=${encodeURIComponent(action)}${query||''}&_=${Date.now()}`;let r;try{r=await fetch(target,{method:'GET',redirect:'follow',cache:'no-store',credentials:'omit'})}catch(err){throw Error('Gagal membaca database Google Apps Script. Detail: '+(err?.message||'Failed to fetch'))}const text=await r.text();let d;try{d=JSON.parse(text)}catch(_){throw Error('Backend tidak mengembalikan JSON yang valid: '+text.slice(0,200))}if(!r.ok||d.success===false)throw Error(d.message||'Request gagal.');return normalizeData(d)}
+  // Writes use a hidden HTML form POST to avoid browser fetch/CORS preflight issues with Apps Script Web Apps.
+  function post(action,body={}){return new Promise((resolve,reject)=>{const url=window.KASRT_CONFIG.apiUrl;if(!url)return reject(Error('URL database/API belum dikonfigurasi.'));const token='kasrt_'+Date.now()+'_'+Math.random().toString(36).slice(2);const iframe=document.createElement('iframe');iframe.name=token;iframe.style.display='none';const form=document.createElement('form');form.method='POST';form.action=url;form.target=token;form.style.display='none';const payload=JSON.stringify({...body,action});const input=document.createElement('input');input.type='hidden';input.name='payload';input.value=payload;form.appendChild(input);document.body.appendChild(iframe);document.body.appendChild(form);let done=false;const finish=async()=>{if(done)return;done=true;try{form.remove();iframe.remove()}catch(_){}try{const fresh=await get('initialData');resolve({...fresh,writeAcknowledged:true})}catch(e){reject(e)}};iframe.addEventListener('load',()=>setTimeout(finish,700));form.submit();setTimeout(()=>{if(!done){try{form.remove();iframe.remove()}catch(_){}reject(Error('Server tidak memberikan konfirmasi dalam 15 detik.'))}},15000)})}
+  return{normalizeTransaction,getInitialData:()=>get('initialData'),getTransactions:(query='')=>get('transactions',query),getReportSummary:()=>get('reportSummary'),getDiagnostic:()=>get('diagnostic'),createTransaction:b=>post('createTransaction',b),updateTransaction:b=>post('updateTransaction',b),cancelTransaction:b=>post('cancelTransaction',b),updateConfig:b=>post('updateConfig',b),changePassword:b=>post('changePassword',b),exportReport:b=>post('exportReport',b)};
 })();
