@@ -1,6 +1,23 @@
 const KasApi=(()=>{
   function normalizeTransaction(t){if(!t)return t;return{id:t.id??t.ID??'',timestamp:t.timestamp??t.Timestamp??'',tanggal:t.tanggal??t.Tanggal??'',waktu:t.waktu??t.Waktu??'',jenis:t.jenis??t.Jenis??'',kategori:t.kategori??t.Kategori??'',nominal:Number(t.nominal??t.Nominal??0),keterangan:t.keterangan??t.Keterangan??'',catatan:t.catatan??t.Catatan??'',status:String(t.status??t.Status??'').trim().toUpperCase(),buktiUrl:t.buktiUrl??t.BuktiURL??'',updatedAt:t.updatedAt??t.UpdatedAt??''}}
   function normalizeData(d){if(Array.isArray(d?.transactions))d.transactions=d.transactions.map(normalizeTransaction);return d}
-  async function request(action,o={}){const url=window.KASRT_CONFIG.apiUrl;if(!url)throw Error('URL database/API belum dikonfigurasi.');const method=o.method||'GET',query=o.query||'',target=method==='GET'?`${url}?action=${encodeURIComponent(action)}${query}&_=${Date.now()}`:url;const opt={method,redirect:'follow',cache:'no-store',credentials:'omit'};if(method!=='GET'){opt.headers={'Content-Type':'text/plain;charset=utf-8','Cache-Control':'no-cache'};opt.body=JSON.stringify({...o.body,action})}const r=await fetch(target,opt),text=await r.text();let d;try{d=JSON.parse(text)}catch(_){throw Error('Backend tidak mengembalikan JSON yang valid.')}if(!r.ok||d.success===false)throw Error(d.message||'Request gagal.');return normalizeData(d)}
+  async function request(action,o={}){
+    const url=window.KASRT_CONFIG.apiUrl;if(!url)throw Error('URL database/API belum dikonfigurasi.');
+    const method=o.method||'GET';
+    let target=url;
+    const opt={method,redirect:'follow',cache:'no-store',credentials:'omit'};
+    if(method==='GET'){
+      target=`${url}?action=${encodeURIComponent(action)}${o.query||''}&_=${Date.now()}`;
+    }else{
+      // Apps Script Web Apps can reject a browser preflight. text/plain is a CORS-safelisted content type;
+      // do not add custom headers that force OPTIONS/preflight.
+      opt.headers={'Content-Type':'text/plain;charset=utf-8'};
+      opt.body=JSON.stringify({...o.body,action});
+    }
+    let r;
+    try{r=await fetch(target,opt)}catch(err){throw Error('Gagal menghubungi server Google Apps Script. Pastikan deployment Web App aktif dan aksesnya dapat digunakan dari browser. Detail: '+(err?.message||'Failed to fetch'))}
+    const text=await r.text();let d;try{d=JSON.parse(text)}catch(_){throw Error('Backend tidak mengembalikan JSON yang valid: '+text.slice(0,200))}
+    if(!r.ok||d.success===false)throw Error(d.message||'Request gagal.');return normalizeData(d)
+  }
   return{normalizeTransaction,getInitialData:()=>request('initialData'),getTransactions:(query='')=>request('transactions',{query}),getReportSummary:()=>request('reportSummary'),createTransaction:b=>request('createTransaction',{method:'POST',body:b}),updateTransaction:b=>request('updateTransaction',{method:'POST',body:b}),cancelTransaction:b=>request('cancelTransaction',{method:'POST',body:b}),updateConfig:b=>request('updateConfig',{method:'POST',body:b}),changePassword:b=>request('changePassword',{method:'POST',body:b}),exportReport:b=>request('exportReport',{method:'POST',body:b})};
 })();
