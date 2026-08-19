@@ -11,7 +11,7 @@ const KasApi = (() => {
       nominal: Number(t.nominal ?? t.Nominal ?? 0),
       keterangan: t.keterangan ?? t.Keterangan ?? '',
       catatan: t.catatan ?? t.Catatan ?? '',
-      status: t.status ?? t.Status ?? '',
+      status: String(t.status ?? t.Status ?? '').trim().toUpperCase(),
       buktiUrl: t.buktiUrl ?? t.BuktiURL ?? '',
       updatedAt: t.updatedAt ?? t.UpdatedAt ?? ''
     };
@@ -51,22 +51,18 @@ const KasApi = (() => {
 
     const response = await fetch(target, fetchOptions);
     const text = await response.text();
-
     let data;
-    try {
-      data = JSON.parse(text);
-    } catch (_) {
-      throw new Error('Backend tidak mengembalikan JSON yang valid.');
-    }
+    try { data = JSON.parse(text); }
+    catch (_) { throw new Error('Backend tidak mengembalikan JSON yang valid.'); }
 
     if (!response.ok || data.success === false) {
       throw new Error(data.message || 'Request gagal.');
     }
-
     return normalizeData(data);
   }
 
   return {
+    normalizeTransaction,
     getInitialData: () => request('initialData'),
     getTransactions: (query='') => request('transactions', {query}),
     createTransaction: body => request('createTransaction', {method:'POST', body}),
