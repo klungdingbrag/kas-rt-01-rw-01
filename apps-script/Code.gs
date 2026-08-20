@@ -1,22 +1,23 @@
-const APP_VERSION='2026.08.20.04';
+const APP_VERSION='2026.08.20.07';
 const DB_ID='1bjH08HdZwb7de7tsFe_uZpBY5NvlR8UC8rBr1yVq-ng';
 const TZ='Asia/Jakarta';
 const SHEETS={TRANSAKSI:'TRANSAKSI',CONFIG:'CONFIG',KATEGORI:'KATEGORI',AUDIT:'AUDIT_LOG'};
 const HEADERS=['ID','Timestamp','Tanggal','Waktu','Jenis','Kategori','Nominal','Keterangan','Catatan','BuktiURL','Status','CreatedBy','UpdatedAt','UpdatedBy'];
 function doGet(e){try{setup_();const a=String(e?.parameter?.action||'app');if(a==='app')return HtmlService.createHtmlOutputFromFile('Index').setTitle('Kas RT 01 / RW 01').setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);return json_(route_(a,e.parameter||{}));}catch(err){return json_({success:false,message:err.message,stack:String(err.stack||'')});}}
 function doPost(e){try{setup_();const p=parse_(e);return json_(route_(p.action||'',p));}catch(err){return json_({success:false,message:err.message,stack:String(err.stack||'')});}}
-function initialData(){setup_();return initial_();}
-function createTransaction(p){setup_();return create_(p||{});}
-function updateTransaction(p){setup_();return update_(p||{});}
-function cancelTransaction(p){setup_();return cancel_(p||{});}
-function updateConfig(p){setup_();return config_(p||{});}
-function changePassword(p){setup_();return changePassword_(p||{});}
-function reportSummary(){setup_();return report_();}
-function diagnostic(){setup_();return diagnostic_();}
+function initialData(){setup_();return safe_(initial_());}
+function createTransaction(p){setup_();return safe_(create_(p||{}));}
+function updateTransaction(p){setup_();return safe_(update_(p||{}));}
+function cancelTransaction(p){setup_();return safe_(cancel_(p||{}));}
+function updateConfig(p){setup_();return safe_(config_(p||{}));}
+function changePassword(p){setup_();return safe_(changePassword_(p||{}));}
+function reportSummary(){setup_();return safe_(report_());}
+function diagnostic(){setup_();return safe_(diagnostic_());}
 function testBackend(){setup_();return{success:true,version:APP_VERSION,time:Utilities.formatDate(new Date(),TZ,'yyyy-MM-dd HH:mm:ss'),spreadsheetId:DB_ID,sheet:!!ss_().getSheetByName(SHEETS.TRANSAKSI),createFunction:typeof createTransaction==='function'};}
 function route_(a,p){switch(a){case'initialData':return initial_();case'createTransaction':return create_(p);case'updateTransaction':return update_(p);case'cancelTransaction':return cancel_(p);case'updateConfig':return config_(p);case'changePassword':return changePassword_(p);case'reportSummary':return report_();case'diagnostic':return diagnostic_();case'testBackend':return testBackend();default:throw Error('Action tidak dikenali: '+a);}}
+function safe_(o){return JSON.parse(JSON.stringify(o));}
 function setup_(){ss_();const s=ss_();sheet_(SHEETS.TRANSAKSI,HEADERS);sheet_(SHEETS.CONFIG,['Key','Value']);sheet_(SHEETS.KATEGORI,['Jenis','Kategori']);sheet_(SHEETS.AUDIT,['Timestamp','Action','TransactionID','Reason','Actor','BeforeJSON','AfterJSON']);const c=readConfig_();if(c.saldo_awal===undefined)setConfig_('saldo_awal','0');if(c.nama_rt===undefined)setConfig_('nama_rt','RT 01');if(c.nama_rw===undefined)setConfig_('nama_rw','RW 01');}
-function initial_(){return{success:true,version:APP_VERSION,config:readConfig_(),categories:categories_(),transactions:transactions_(),dashboard:dashboard_()};}
+function initial_(){const config=readConfig_(),categories=categories_(),transactions=transactions_(),dashboard=dashboard_();return{success:true,version:APP_VERSION,config, categories,transactions,dashboard};}
 function transactions_(){const s=ss_().getSheetByName(SHEETS.TRANSAKSI);if(s.getLastRow()<2)return[];const v=s.getRange(1,1,s.getLastRow(),s.getLastColumn()).getValues(),h=v.shift().map(String);return v.map(r=>{const o={};h.forEach((x,i)=>o[x]=r[i]);return normalize_(o)}).filter(x=>x.id).reverse();}
 function normalize_(x){let status=String(x.Status||'').trim().toUpperCase(),bukti=String(x.BuktiURL||'');if(!status&&bukti.toUpperCase()==='AKTIF'){status='AKTIF';bukti='';}return{id:String(x.ID||''),timestamp:date_(x.Timestamp),tanggal:dateOnly_(x.Tanggal),waktu:timeOnly_(x.Waktu),jenis:type_(x.Jenis),kategori:String(x.Kategori||''),nominal:money_(x.Nominal),keterangan:String(x.Keterangan||''),catatan:String(x.Catatan||''),buktiUrl:bukti,status,createdBy:createdBy_(x.CreatedBy),updatedAt:date_(x.UpdatedAt),updatedBy:String(x.UpdatedBy||'')}}
 function createdBy_(v){return v instanceof Date?'':String(v||'');}
@@ -29,14 +30,15 @@ function update_(p){auth_(p.password);const f=findRow_(p.transactionId);if(!f)th
 function cancel_(p){auth_(p.password);const f=findRow_(p.transactionId);if(!f)throw Error('Transaksi tidak ditemukan.');if(f.data.status!=='AKTIF')throw Error('Transaksi sudah dibatalkan.');if(!p.reason)throw Error('Alasan pembatalan wajib diisi.');const m=headerMap_(f.sheet);f.sheet.getRange(f.row,m.Status).setValue('DIBATALKAN');f.sheet.getRange(f.row,m.UpdatedAt).setValue(new Date());f.sheet.getRange(f.row,m.UpdatedBy).setValue('admin');SpreadsheetApp.flush();audit_('CANCEL',p.transactionId,p.reason,f.data,find_(p.transactionId));return{success:true,transaction:find_(p.transactionId),dashboard:dashboard_()};}
 function config_(p){auth_(p.password);Object.keys(p.config||{}).forEach(k=>setConfig_(k,p.config[k]));SpreadsheetApp.flush();return{success:true,config:readConfig_(),dashboard:dashboard_()};}
 function changePassword_(p){auth_(p.currentPassword);if(String(p.newPassword||'').length<8)throw Error('Password minimal 8 karakter.');PropertiesService.getScriptProperties().setProperty('ADMIN_PASSWORD',String(p.newPassword));return{success:true};}
-function report_(){const c=readConfig_(),d=dashboard_();return{success:true,date:Utilities.formatDate(new Date(),TZ,'d/M/yyyy'),nama_rt:c.nama_rt,nama_rw:c.nama_rw,dukuh:c.dukuh,desa:c.desa,saldoAwal:d.saldoAwal,pemasukan:d.pemasukan,pengeluaran:d.pengeluaran,saldo:d.saldo};}
+function report_(){const c=readConfig_(),d=dashboard_();return{success:true,date:Utilities.formatDate(new Date(),TZ,'d/M/yyyy'),nama_rt:String(c.nama_rt||''),nama_rw:String(c.nama_rw||''),dukuh:String(c.dukuh||''),desa:String(c.desa||''),saldoAwal:d.saldoAwal,pemasukan:d.pemasukan,pengeluaran:d.pengeluaran,saldo:d.saldo};}
 function diagnostic_(){const t=transactions_(),d=dashboard_();return{success:true,version:APP_VERSION,spreadsheetId:DB_ID,rows:t.length,active:t.filter(x=>x.status==='AKTIF').length,pemasukan:d.pemasukan,pengeluaran:d.pengeluaran,saldoAwal:d.saldoAwal,saldo:d.saldo,headers:headerMap_(ss_().getSheetByName(SHEETS.TRANSAKSI)),sample:t.slice(0,10)};}
 function find_(id){const f=findRow_(id);return f?f.data:null;}
 function findRow_(id){const s=ss_().getSheetByName(SHEETS.TRANSAKSI);if(s.getLastRow()<2)return null;const m=headerMap_(s),ids=s.getRange(2,m.ID,s.getLastRow()-1,1).getValues();for(let i=0;i<ids.length;i++)if(String(ids[i][0])===String(id)){const row=i+2,vals=s.getRange(row,1,1,s.getLastColumn()).getValues()[0],o={};Object.keys(m).forEach(h=>o[h]=vals[m[h]-1]);return{sheet:s,row,data:normalize_(o)}}return null;}
 function headerMap_(s){const h=s.getRange(1,1,1,s.getLastColumn()).getValues()[0].map(String),o={};h.forEach((x,i)=>o[x]=i+1);return o;}
-function readConfig_(){const s=ss_().getSheetByName(SHEETS.CONFIG),o={};if(s.getLastRow()>1)s.getRange(2,1,s.getLastRow()-1,2).getValues().forEach(r=>{if(r[0])o[String(r[0])]=r[1]});return o;}
+function readConfig_(){const s=ss_().getSheetByName(SHEETS.CONFIG),o={};if(s.getLastRow()>1)s.getRange(2,1,s.getLastRow()-1,2).getValues().forEach(r=>{if(r[0])o[String(r[0])]=safeValue_(r[1])});return o;}
+function safeValue_(v){return v instanceof Date?Utilities.formatDate(v,TZ,'yyyy-MM-dd HH:mm:ss'):typeof v==='number'||typeof v==='boolean'||typeof v==='string'?v:String(v??'');}
 function setConfig_(k,v){const s=ss_().getSheetByName(SHEETS.CONFIG),m=s.getLastRow()>1?s.getRange(2,1,s.getLastRow()-1,1).getValues():[];for(let i=0;i<m.length;i++)if(String(m[i][0])===k){s.getRange(i+2,2).setValue(v);return;}s.appendRow([k,v]);}
-function categories_(){const s=ss_().getSheetByName(SHEETS.KATEGORI),o={Pemasukan:[],Pengeluaran:[]};if(s.getLastRow()>1)s.getRange(2,1,s.getLastRow()-1,2).getValues().forEach(r=>{if(o[r[0]])o[r[0]].push(String(r[1]))});return o;}
+function categories_(){const s=ss_().getSheetByName(SHEETS.KATEGORI),o={Pemasukan:[],Pengeluaran:[]};if(s.getLastRow()>1)s.getRange(2,1,s.getLastRow()-1,2).getValues().forEach(r=>{if(o[r[0]])o[r[0]].push(String(r[1]));});return o;}
 function audit_(a,id,r,b,af){ss_().getSheetByName(SHEETS.AUDIT).appendRow([new Date(),a,id,r,'admin',JSON.stringify(b),JSON.stringify(af)]);}
 function auth_(p){const saved=PropertiesService.getScriptProperties().getProperty('ADMIN_PASSWORD')||'RT01@2026';if(String(p)!==saved)throw Error('Password admin salah.');}
 function parse_(e){if(!e?.postData?.contents)return{};try{const p=JSON.parse(e.postData.contents);if(p.payload)return JSON.parse(p.payload);return p;}catch(_){return{}}}
